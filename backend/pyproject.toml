@@ -1,0 +1,21 @@
+[project]
+name = "radius-backend"
+version = "0.1.0"
+description = "Backend for Radius"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi>=0.116.1",
+    "uvicorn[standard]>=0.35.0",
+    "sqlalchemy>=2.0.43",
+    "alembic>=1.16.4",
+    "asyncpg>=0.30.0",
+    "redis>=6.4.0",
+    "pydantic>=2.11.7",
+    "pydantic-settings>=2.10.1",
+    "geoalchemy2>=0.18.0",
+    "greenlet>=3.5.4",
+]
+
+[tool.uv]
+package = false
