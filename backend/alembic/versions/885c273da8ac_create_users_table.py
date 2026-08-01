@@ -1,8 +1,8 @@
 """create users table
 
-Revision ID: f5924d83e77c
+Revision ID: 885c273da8ac
 Revises: 
-Create Date: 2026-08-01 23:59:43.237830
+Create Date: 2026-08-02 00:54:03.729546
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from geoalchemy2 import Geography
 
 # revision identifiers, used by Alembic.
-revision: str = 'f5924d83e77c'
+revision: str = '885c273da8ac'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -29,7 +29,8 @@ def upgrade() -> None:
     sa.Column('last_seen', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_users')),
+    sa.UniqueConstraint('nickname', name=op.f('uq_users_nickname'))
     )
     op.create_geospatial_index('idx_users_location', 'users', ['location'], unique=False, postgresql_using='gist', postgresql_ops={})
     # ### end Alembic commands ###

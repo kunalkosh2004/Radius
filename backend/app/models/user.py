@@ -3,8 +3,9 @@ from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from geoalchemy2 import Geography
-from datetime import UTC, datetime
 from geoalchemy2.elements import WKBElement
+from geoalchemy2.shape import to_shape
+from datetime import UTC, datetime
 import uuid
 
 
@@ -17,9 +18,11 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        nullable=False
+        default=uuid.uuid4,
     )
-    nickname: Mapped[str] = mapped_column(String(30), nullable=False)
+    nickname: Mapped[str] = mapped_column(
+        String(30), unique=True, nullable=False
+    )
     location: Mapped[WKBElement] = mapped_column(
         Geography("POINT", srid=4326),
         nullable=False,
@@ -43,3 +46,11 @@ class User(Base):
         onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+    @property
+    def latitude(self) -> float:
+        return to_shape(self.location).y
+
+    @property
+    def longitude(self) -> float:
+        return to_shape(self.location).x
