@@ -18,4 +18,4 @@ async def health(db: AsyncSession = Depends(get_db)):
     return {
         "status": "healthy",
         "database": result.scalar(),
-    }user.py
+    }

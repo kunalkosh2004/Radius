@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from functools import lru_cache
 
 class Settings(BaseSettings):
     APP_NAME: str = "Radius"
@@ -16,5 +16,6 @@ class Settings(BaseSettings):
         case_sensitive=True,
     )
 
-
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
