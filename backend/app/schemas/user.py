@@ -21,3 +21,12 @@ class UserRead(BaseModel):
     last_seen: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class LocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90.0, le=90.0)
+    longitude: float = Field(ge=-180.0, le=180.0)
+
+
+class UserNearby(UserRead):
+    distance_m: float

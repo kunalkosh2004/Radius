@@ -65,3 +65,115 @@ async def test_create_user_persists_geography(client, db_session):
 
     assert longitude == pytest.approx(98.7654)
     assert latitude == pytest.approx(12.3456)
+
+
+async def test_update_location_returns_204_and_persists(client, db_session):
+    created = await client.post(
+        "/api/v1/users",
+        json={"nickname": "Mover", "latitude": 0.0, "longitude": 0.0},
+    )
+    assert created.status_code == 201
+    user_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/api/v1/users/{user_id}/location",
+        json={"latitude": 51.5074, "longitude": -0.1278},
+    )
+    assert response.status_code == 204
+    assert response.content == b""
+
+    result = await db_session.execute(
+        text(
+            "SELECT ST_X(location::geometry), ST_Y(location::geometry) "
+            "FROM users WHERE id = :id"
+        ),
+        {"id": user_id},
+    )
+    longitude, latitude = result.one()
+    assert longitude == pytest.approx(-0.1278)
+    assert latitude == pytest.approx(51.5074)
+
+
+async def test_update_location_unknown_user_returns_404(client):
+    response = await client.patch(
+        "/api/v1/users/00000000-0000-0000-0000-000000000000/location",
+        json={"latitude": 0.0, "longitude": 0.0},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "user not found"
+
+
+async def test_nearby_returns_users_within_radius(client):
+    origin = await client.post(
+        "/api/v1/users",
+        json={"nickname": "Origin", "latitude": 0.0, "longitude": 0.0},
+    )
+    origin_id = origin.json()["id"]
+
+    await client.post(
+        "/api/v1/users",
+        json={"nickname": "Near", "latitude": 0.01, "longitude": 0.0},
+    )
+    await client.post(
+        "/api/v1/users",
+        json={"nickname": "Far", "latitude": 1.0, "longitude": 0.0},
+    )
+
+    response = await client.get(f"/api/v1/users/{origin_id}/nearby?radius_m=5000")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [user["nickname"] for user in body] == ["Near"]
+    assert body[0]["distance_m"] == pytest.approx(1105.7, rel=0.01)
+
+
+async def test_nearby_excludes_self(client):
+    origin = await client.post(
+        "/api/v1/users",
+        json={"nickname": "Origin", "latitude": 0.0, "longitude": 0.0},
+    )
+
+    response = await client.get(
+        f"/api/v1/users/{origin.json()['id']}/nearby?radius_m=5000"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_nearby_default_radius_filters_beyond_500m(client):
+    origin = await client.post(
+        "/api/v1/users",
+        json={"nickname": "Origin", "latitude": 0.0, "longitude": 0.0},
+    )
+    await client.post(
+        "/api/v1/users",
+        json={"nickname": "Close", "latitude": 0.001, "longitude": 0.0},
+    )
+    await client.post(
+        "/api/v1/users",
+        json={"nickname": "Edge", "latitude": 0.01, "longitude": 0.0},
+    )
+
+    response = await client.get(f"/api/v1/users/{origin.json()['id']}/nearby")
+
+    assert [user["nickname"] for user in response.json()] == ["Close"]
+
+
+async def test_nearby_unknown_user_returns_404(client):
+    response = await client.get(
+        "/api/v1/users/00000000-0000-0000-0000-000000000000/nearby"
+    )
+    assert response.status_code == 404
+
+
+async def test_nearby_invalid_radius_returns_422(client):
+    origin = await client.post(
+        "/api/v1/users",
+        json={"nickname": "Origin", "latitude": 0.0, "longitude": 0.0},
+    )
+
+    response = await client.get(
+        f"/api/v1/users/{origin.json()['id']}/nearby?radius_m=0"
+    )
+    assert response.status_code == 422
