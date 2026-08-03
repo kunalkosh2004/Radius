@@ -1,7 +1,7 @@
 import os
 
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://radius:radius123@localhost:5435/radius_test"
-os.environ["REDIS_URL"] = "redis://localhost:6379"
+os.environ["REDIS_URL"] = "redis://localhost:6380"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["DEBUG"] = "false"
 

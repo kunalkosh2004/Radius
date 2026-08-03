@@ -11,19 +11,25 @@ from app.api.v1.router import api_router
 from app.core.background import presence_sweeper
 from app.core.config import get_settings
 from app.core.exceptions import AppError
+from app.core.pubsub import subscribe
+from app.core.redis import get_redis
 from app.db.dependencies import get_db
-from app.websocket.router import router as ws_router
+from app.websocket.router import manager, router as ws_router
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(presence_sweeper())
+    tasks = [
+        asyncio.create_task(presence_sweeper()),
+        asyncio.create_task(subscribe(get_redis(), manager)),
+    ]
     yield
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
+    for task in tasks:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(

@@ -1,21 +1,33 @@
 import anyio
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_settings
 from app.core.exceptions import SelfMessageNotAllowedError, UserNotFoundError
+from app.core.pubsub import publish
+from app.core.redis import get_redis
 from app.db.session import SessionLocal
 from app.models import Message, User
 from app.repositories.message import MessageRepository
 from app.repositories.user import UserRepository
+from app.services.connection_tracker import ConnectionTracker
 from app.services.message import MessageService
 from app.services.presence import PresenceService
 from app.websocket.manager import ConnectionManager
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 manager = ConnectionManager()
+tracker = ConnectionTracker(get_redis())
 settings = get_settings()
+
+
+async def _fanout(target_ids: list[UUID], payload: dict) -> None:
+    """Deliver to every socket of the target users on all instances."""
+    await publish(get_redis(), manager, target_ids, payload)
 
 
 def _presence_update(
@@ -83,8 +95,8 @@ async def _handle_message_read(
         }
     )
     for sender_id, ids in marked_by_sender.items():
-        await manager.send_to_user(
-            UUID(sender_id),
+        await _fanout(
+            [UUID(sender_id)],
             {
                 "type": "message:read",
                 "ids": ids,
@@ -145,8 +157,8 @@ async def _handle_message_send(
         payload = _message_payload(message)
 
     await websocket.send_json({"type": "message:ack", "message": payload})
-    await manager.send_to_user(
-        recipient_id, {"type": "message:new", "message": payload}
+    await _fanout(
+        [recipient_id], {"type": "message:new", "message": payload}
     )
 
 
@@ -160,6 +172,10 @@ async def websocket_endpoint(
     lifetime of the socket. Each operation opens a short-lived session and
     commits explicitly, so one idle connection doesn't pin a pooled
     connection to the database.
+
+    Presence is global, not per-process: `tracker` counts sockets across all
+    instances in Redis, and fan-out goes through Redis pub/sub so sockets on
+    other instances receive the same events.
     """
     async with SessionLocal() as session:
         service = PresenceService(UserRepository(session))
@@ -167,14 +183,19 @@ async def websocket_endpoint(
         if me is None:
             await websocket.close(code=4404, reason="unknown user")
             return
-        await service.mark_online(user_id)
-        await session.commit()
-
-    await websocket.accept()
-    manager.add(user_id, websocket)
 
     radius = settings.PRESENCE_NEARBY_RADIUS_M
+    await websocket.accept()
     try:
+        manager.add(user_id, websocket)
+        is_first = await tracker.connect(user_id)
+
+        if is_first:
+            async with SessionLocal() as session:
+                service = PresenceService(UserRepository(session))
+                await service.mark_online(user_id)
+                await session.commit()
+
         async with SessionLocal() as session:
             service = PresenceService(UserRepository(session))
             nearby = await service.nearby_online(user_id, radius)
@@ -192,10 +213,12 @@ async def websocket_endpoint(
                 ],
             }
         )
-        for other, distance in nearby:
-            await manager.send_to_user(
-                other.id, _presence_update(me, "online", round(distance, 1))
-            )
+        if is_first:
+            for other, distance in nearby:
+                await _fanout(
+                    [other.id],
+                    _presence_update(me, "online", round(distance, 1)),
+                )
 
         while True:
             try:
@@ -220,19 +243,20 @@ async def websocket_endpoint(
             elif message.get("type") == "message:read":
                 await _handle_message_read(websocket, me.id, message)
     finally:
-        is_last = manager.remove(user_id, websocket)
+        manager.remove(user_id, websocket)
+        try:
+            is_last = await tracker.disconnect(user_id)
+        except Exception:
+            logger.exception("connection tracker disconnect failed")
+            is_last = False
         if is_last:
-            me = None
-            nearby = []
             async with SessionLocal() as session:
                 service = PresenceService(UserRepository(session))
-                me = await service.get_user(user_id)
-                if me is not None:
-                    await service.mark_offline(user_id)
-                    await session.commit()
-                    nearby = await service.nearby_online(user_id, radius)
-            if me is not None:
-                for other, distance in nearby:
-                    await manager.send_to_user(
-                        other.id, _presence_update(me, "offline", round(distance, 1))
-                    )
+                await service.mark_offline(user_id)
+                await session.commit()
+                nearby = await service.nearby_online(user_id, radius)
+            for other, distance in nearby:
+                await _fanout(
+                    [other.id],
+                    _presence_update(me, "offline", round(distance, 1)),
+                )

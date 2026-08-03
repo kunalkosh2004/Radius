@@ -23,8 +23,13 @@ class ConnectionManager:
     def connection_count(self) -> int:
         return sum(len(sockets) for sockets in self._connections.values())
 
+    @staticmethod
+    def _as_uuid(user_id: UUID) -> UUID:
+        return user_id if isinstance(user_id, UUID) else UUID(user_id)
+
     def add(self, user_id: UUID, websocket: WebSocket) -> bool:
         """Register a socket. Returns True if it is the user's first."""
+        user_id = self._as_uuid(user_id)
         sockets = self._connections.setdefault(user_id, set())
         is_first = not sockets
         sockets.add(websocket)
@@ -32,6 +37,7 @@ class ConnectionManager:
 
     def remove(self, user_id: UUID, websocket: WebSocket) -> bool:
         """Unregister a socket. Returns True if it was the user's last."""
+        user_id = self._as_uuid(user_id)
         sockets = self._connections.get(user_id)
         if sockets is None:
             return False
@@ -42,7 +48,7 @@ class ConnectionManager:
         return False
 
     async def send_to_user(self, user_id: UUID, message: dict) -> None:
-        for websocket in list(self._connections.get(user_id, ())):
+        for websocket in list(self._connections.get(self._as_uuid(user_id), ())):
             try:
                 await websocket.send_json(message)
             except Exception:
