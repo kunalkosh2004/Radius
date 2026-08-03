@@ -231,3 +231,162 @@ async def test_conversation_history_unknown_user(client):
         f"/api/v1/users/{alice['id']}/messages/{uuid4()}"
     )
     assert response.status_code == 404
+
+
+async def test_read_receipt_marks_messages_and_persists(client):
+    alice = await create_user(client, "alice")
+    bob = await create_user(client, "bob")
+
+    async with connect(client, alice["id"]) as alice_ws:
+        await alice_ws.receive_json()
+        ids = []
+        for body in ["m1", "m2"]:
+            await alice_ws.send_json(
+                {"type": "message:send", "to": bob["id"], "body": body}
+            )
+            ids.append((await alice_ws.receive_json())["message"]["id"])
+
+    async with connect(client, bob["id"]) as bob_ws:
+        await bob_ws.receive_json()  # presence:initial
+        await bob_ws.send_json({"type": "message:read", "ids": ids})
+        read_ack = await bob_ws.receive_json()
+        assert read_ack["type"] == "message:read"
+        assert set(read_ack["ids"]) == set(ids)
+        assert read_ack["read_at"] is not None
+
+    response = await client.get(
+        f"/api/v1/users/{alice['id']}/messages/{bob['id']}"
+    )
+    assert all(m["read_at"] is not None for m in response.json())
+
+
+async def test_read_receipt_notifies_sender(client):
+    alice = await create_user(client, "alice")
+    bob = await create_user(client, "bob")
+
+    async with connect(client, alice["id"]) as alice_ws:
+        await alice_ws.receive_json()  # alice initial
+        async with connect(client, bob["id"]) as bob_ws:
+            await bob_ws.receive_json()  # bob initial
+            await alice_ws.receive_json()  # alice sees bob online
+
+            await alice_ws.send_json(
+                {"type": "message:send", "to": bob["id"], "body": "read me"}
+            )
+            ack = await alice_ws.receive_json()
+            await bob_ws.receive_json()  # delivery
+
+            await bob_ws.send_json(
+                {"type": "message:read", "ids": [ack["message"]["id"]]}
+            )
+            await bob_ws.receive_json()  # bob's read ack
+            receipt = await alice_ws.receive_json()
+            assert receipt["type"] == "message:read"
+            assert receipt["ids"] == [ack["message"]["id"]]
+            assert receipt["read_at"] is not None
+
+
+async def test_cannot_mark_own_sent_messages_read(client):
+    alice = await create_user(client, "alice")
+    bob = await create_user(client, "bob")
+
+    async with connect(client, alice["id"]) as alice_ws:
+        await alice_ws.receive_json()
+        async with connect(client, bob["id"]) as bob_ws:
+            await bob_ws.receive_json()
+            await alice_ws.receive_json()  # alice sees bob online
+
+            await alice_ws.send_json(
+                {"type": "message:send", "to": bob["id"], "body": "m"}
+            )
+            ack = await alice_ws.receive_json()
+            await bob_ws.receive_json()  # delivery
+
+            await alice_ws.send_json(
+                {"type": "message:read", "ids": [ack["message"]["id"]]}
+            )
+            read_ack = await alice_ws.receive_json()
+            assert read_ack["type"] == "message:read"
+            assert read_ack["ids"] == []
+
+
+async def test_message_read_invalid_payloads(client):
+    alice = await create_user(client, "alice")
+    async with connect(client, alice["id"]) as alice_ws:
+        await alice_ws.receive_json()
+        for payload in [
+            {"type": "message:read"},
+            {"type": "message:read", "ids": []},
+            {"type": "message:read", "ids": "x"},
+            {"type": "message:read", "ids": ["not-a-uuid"]},
+        ]:
+            await alice_ws.send_json(payload)
+            error = await alice_ws.receive_json()
+            assert error["type"] == "message:error"
+
+
+async def test_conversations_lists_peers_ordered_by_activity(client):
+    alice = await create_user(client, "alice")
+    bob = await create_user(client, "bob")
+    carol = await create_user(client, "carol")
+
+    async with connect(client, alice["id"]) as alice_ws:
+        await alice_ws.receive_json()
+        for body in ["to bob 1", "to bob 2"]:
+            await alice_ws.send_json(
+                {"type": "message:send", "to": bob["id"], "body": body}
+            )
+            await alice_ws.receive_json()
+
+    async with connect(client, carol["id"]) as carol_ws:
+        await carol_ws.receive_json()
+        await carol_ws.send_json(
+            {"type": "message:send", "to": alice["id"], "body": "hi alice"}
+        )
+        await carol_ws.receive_json()
+
+    response = await client.get(f"/api/v1/users/{alice['id']}/conversations")
+    assert response.status_code == 200
+    convos = response.json()
+
+    assert [c["peer"]["nickname"] for c in convos] == ["carol", "bob"]
+    assert convos[0]["last_message"]["body"] == "hi alice"
+    assert convos[0]["unread_count"] == 1
+    assert convos[1]["last_message"]["body"] == "to bob 2"
+    assert convos[1]["unread_count"] == 0
+
+
+async def test_conversations_reflect_read_receipts(client):
+    alice = await create_user(client, "alice")
+    bob = await create_user(client, "bob")
+
+    async with connect(client, bob["id"]) as bob_ws:
+        await bob_ws.receive_json()
+        await bob_ws.send_json(
+            {"type": "message:send", "to": alice["id"], "body": "unread"}
+        )
+        ack = await bob_ws.receive_json()
+
+    url = f"/api/v1/users/{alice['id']}/conversations"
+    assert (await client.get(url)).json()[0]["unread_count"] == 1
+
+    async with connect(client, alice["id"]) as alice_ws:
+        await alice_ws.receive_json()
+        await alice_ws.send_json(
+            {"type": "message:read", "ids": [ack["message"]["id"]]}
+        )
+        await alice_ws.receive_json()
+
+    assert (await client.get(url)).json()[0]["unread_count"] == 0
+
+
+async def test_conversations_empty(client):
+    alice = await create_user(client, "alice")
+    response = await client.get(f"/api/v1/users/{alice['id']}/conversations")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_conversations_unknown_user(client):
+    response = await client.get(f"/api/v1/users/{uuid4()}/conversations")
+    assert response.status_code == 404

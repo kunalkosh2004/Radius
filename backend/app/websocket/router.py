@@ -35,8 +35,62 @@ def _message_payload(message: Message) -> dict:
         "from": str(message.sender_id),
         "to": str(message.recipient_id),
         "body": message.body,
+        "read_at": (
+            message.read_at.isoformat() if message.read_at is not None else None
+        ),
         "created_at": message.created_at.isoformat(),
     }
+
+
+async def _handle_message_read(
+    websocket: WebSocket, reader_id: UUID, raw: dict
+) -> None:
+    """Handle message:read: mark received messages read and notify senders."""
+    ids_raw = raw.get("ids")
+    if not isinstance(ids_raw, list) or not ids_raw:
+        await websocket.send_json(
+            {"type": "message:error", "error": "ids is required"}
+        )
+        return
+
+    try:
+        message_ids = [UUID(str(item)) for item in ids_raw]
+    except (ValueError, TypeError):
+        await websocket.send_json(
+            {"type": "message:error", "error": "invalid message id"}
+        )
+        return
+
+    async with SessionLocal() as session:
+        service = MessageService(
+            MessageRepository(session), UserRepository(session)
+        )
+        messages = await service.mark_read(reader_id, message_ids)
+        await session.commit()
+        # Capture everything while the session is open (commit expires rows).
+        read_at = messages[0].read_at if messages else None
+        marked_by_sender: dict[str, list[str]] = {}
+        for message in messages:
+            marked_by_sender.setdefault(str(message.sender_id), []).append(
+                str(message.id)
+            )
+
+    await websocket.send_json(
+        {
+            "type": "message:read",
+            "ids": [str(m.id) for m in messages],
+            "read_at": read_at.isoformat() if read_at is not None else None,
+        }
+    )
+    for sender_id, ids in marked_by_sender.items():
+        await manager.send_to_user(
+            UUID(sender_id),
+            {
+                "type": "message:read",
+                "ids": ids,
+                "read_at": read_at.isoformat() if read_at is not None else None,
+            },
+        )
 
 
 async def _handle_message_send(
@@ -163,6 +217,8 @@ async def websocket_endpoint(
                     await session.commit()
             elif message.get("type") == "message:send":
                 await _handle_message_send(websocket, me.id, message)
+            elif message.get("type") == "message:read":
+                await _handle_message_read(websocket, me.id, message)
     finally:
         is_last = manager.remove(user_id, websocket)
         if is_last:

@@ -16,6 +16,12 @@ class UserRepository(BaseRepository[User]):
         )
         return result.scalar_one_or_none()
 
+    async def get_many(self, user_ids: list[UUID]) -> dict[UUID, User]:
+        result = await self._session.execute(
+            select(User).where(User.id.in_(user_ids))
+        )
+        return {user.id: user for user in result.scalars()}
+
     async def find_nearby(
         self, origin: WKBElement, radius_m: int, exclude_id: UUID
     ) -> list[tuple[User, float]]:

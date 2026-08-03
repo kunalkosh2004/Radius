@@ -7,10 +7,14 @@ from app.db.dependencies import get_db
 from app.models import Message
 from app.repositories.message import MessageRepository
 from app.repositories.user import UserRepository
-from app.schemas.message import MessageRead
+from app.schemas.message import ConversationRead, MessageRead
+from app.schemas.user import UserRead
 from app.services.message import MessageService
 
 router = APIRouter(prefix="/users/{user_id}/messages", tags=["messages"])
+conversations_router = APIRouter(
+    prefix="/users/{user_id}", tags=["conversations"]
+)
 
 
 async def get_message_service(
@@ -29,3 +33,20 @@ async def get_conversation(
 ) -> list[Message]:
     """Newest-first history between user_id and peer_id (both directions)."""
     return await service.get_conversation(user_id, peer_id, before, limit)
+
+
+@conversations_router.get("/conversations", response_model=list[ConversationRead])
+async def list_conversations(
+    user_id: UUID,
+    service: MessageService = Depends(get_message_service),
+) -> list[ConversationRead]:
+    """Every peer user_id has exchanged messages with, newest activity first."""
+    conversations = await service.list_conversations(user_id)
+    return [
+        ConversationRead(
+            peer=UserRead.model_validate(peer),
+            last_message=MessageRead.model_validate(message),
+            unread_count=unread,
+        )
+        for peer, message, unread in conversations
+    ]

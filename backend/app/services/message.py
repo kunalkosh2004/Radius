@@ -2,7 +2,7 @@ from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.exceptions import SelfMessageNotAllowedError, UserNotFoundError
-from app.models import Message
+from app.models import Message, User
 from app.repositories.message import MessageRepository
 from app.repositories.user import UserRepository
 
@@ -48,3 +48,35 @@ class MessageService:
             raise UserNotFoundError()
 
         return await self._repository.get_conversation(me, peer, before, limit)
+
+    async def mark_read(
+        self, by_user: UUID, message_ids: list[UUID]
+    ) -> list[Message]:
+        """Mark received messages as read. Returns the ones actually marked."""
+        if not message_ids:
+            return []
+        return await self._repository.mark_read(message_ids, by_user)
+
+    async def list_conversations(
+        self, user_id: UUID
+    ) -> list[tuple[User, Message, int]]:
+        """(peer, latest message, unread count) per peer, newest activity first."""
+        user = await self._user_repository.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError()
+
+        latest = await self._repository.list_latest_message_ids(user_id)
+        if not latest:
+            return []
+
+        peer_ids = list(latest.keys())
+        messages = await self._repository.get_many(list(latest.values()))
+        peers = await self._user_repository.get_many(peer_ids)
+        unread = await self._repository.unread_counts(user_id)
+
+        conversations = [
+            (peers[peer_id], messages[message_id], unread.get(peer_id, 0))
+            for peer_id, message_id in latest.items()
+        ]
+        conversations.sort(key=lambda c: c[1].created_at, reverse=True)
+        return conversations

@@ -42,6 +42,10 @@ class Message(Base):
         nullable=False,
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=lambda: datetime.now(UTC), nullable=False
     )
