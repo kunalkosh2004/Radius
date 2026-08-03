@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     PRESENCE_SWEEP_INTERVAL_S: int = 15
     PRESENCE_NEARBY_RADIUS_M: int = 500
 
+    MESSAGE_MAX_LENGTH: int = 2000
+    MESSAGE_PAGE_SIZE: int = 50
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

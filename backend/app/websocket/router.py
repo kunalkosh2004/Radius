@@ -4,9 +4,12 @@ from uuid import UUID
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_settings
+from app.core.exceptions import SelfMessageNotAllowedError, UserNotFoundError
 from app.db.session import SessionLocal
-from app.models import User
+from app.models import Message, User
+from app.repositories.message import MessageRepository
 from app.repositories.user import UserRepository
+from app.services.message import MessageService
 from app.services.presence import PresenceService
 from app.websocket.manager import ConnectionManager
 
@@ -24,6 +27,73 @@ def _presence_update(
         "user": {"id": str(user.id), "nickname": user.nickname},
         "distance_m": distance_m,
     }
+
+
+def _message_payload(message: Message) -> dict:
+    return {
+        "id": str(message.id),
+        "from": str(message.sender_id),
+        "to": str(message.recipient_id),
+        "body": message.body,
+        "created_at": message.created_at.isoformat(),
+    }
+
+
+async def _handle_message_send(
+    websocket: WebSocket, sender_id: UUID, raw: dict
+) -> None:
+    """Handle message:send: validate, persist, ack the sender, deliver to peer."""
+    try:
+        recipient_id = UUID(str(raw.get("to")))
+    except (ValueError, TypeError):
+        await websocket.send_json(
+            {"type": "message:error", "error": "invalid recipient"}
+        )
+        return
+
+    body = raw.get("body")
+    if not isinstance(body, str):
+        await websocket.send_json(
+            {"type": "message:error", "error": "message body is required"}
+        )
+        return
+    body = body.strip()
+    if not body:
+        await websocket.send_json(
+            {"type": "message:error", "error": "message body is required"}
+        )
+        return
+    if len(body) > settings.MESSAGE_MAX_LENGTH:
+        await websocket.send_json(
+            {
+                "type": "message:error",
+                "error": (
+                    f"message body exceeds {settings.MESSAGE_MAX_LENGTH} characters"
+                ),
+            }
+        )
+        return
+
+    async with SessionLocal() as session:
+        service = MessageService(
+            MessageRepository(session), UserRepository(session)
+        )
+        try:
+            message = await service.send_message(sender_id, recipient_id, body)
+        except (UserNotFoundError, SelfMessageNotAllowedError) as exc:
+            await websocket.send_json(
+                {"type": "message:error", "error": exc.detail}
+            )
+            return
+        await session.commit()
+        # Access attributes while the session is still open (commit expires
+        # the instance; doing this later would hit a detached instance).
+        payload = _message_payload(message)
+
+    await websocket.send_json({"type": "message:ack", "message": payload})
+    await manager.send_to_user(
+        recipient_id, {"type": "message:new", "message": payload}
+    )
 
 
 @router.websocket("/ws")
@@ -91,6 +161,8 @@ async def websocket_endpoint(
                     service = PresenceService(UserRepository(session))
                     await service.touch(user_id)
                     await session.commit()
+            elif message.get("type") == "message:send":
+                await _handle_message_send(websocket, me.id, message)
     finally:
         is_last = manager.remove(user_id, websocket)
         if is_last:

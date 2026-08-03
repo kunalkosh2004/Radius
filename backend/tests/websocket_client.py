@@ -39,8 +39,11 @@ class ASGIWebSocketClient:
             "subprotocols": [],
         }
         to_app, from_client = create_memory_object_stream(max_buffer_size=16)
-        to_client, self._from_app = create_memory_object_stream(max_buffer_size=16)
+        to_client, from_app = create_memory_object_stream(max_buffer_size=16)
         self._to_app = to_app
+        self._from_app = from_app
+        self._from_client = from_client
+        self._to_client = to_client
         self._receive = from_client.receive
         self._send = to_client.send
         self._task: asyncio.Task | None = None
@@ -55,6 +58,7 @@ class ASGIWebSocketClient:
         first = await asyncio.wait_for(self._from_app.receive(), timeout=5)
         if first["type"] == "websocket.close":
             await self._wait_for_task()
+            self._close_streams()
             raise WebSocketDisconnect(
                 first.get("code"), first.get("reason", "")
             )
@@ -70,6 +74,16 @@ class ASGIWebSocketClient:
             except Exception:
                 pass
         await self._wait_for_task()
+        self._close_streams()
+
+    def _close_streams(self) -> None:
+        for stream in (
+            self._to_app,
+            self._from_app,
+            self._from_client,
+            self._to_client,
+        ):
+            stream.close()
 
     async def send_json(self, data: dict) -> None:
         await self._to_app.send(

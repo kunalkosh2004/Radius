@@ -16,3 +16,8 @@ class NicknameAlreadyTakenError(AppError):
 class UserNotFoundError(AppError):
     status_code = HTTPStatus.NOT_FOUND
     detail = "user not found"
+
+
+class SelfMessageNotAllowedError(AppError):
+    status_code = HTTPStatus.BAD_REQUEST
+    detail = "cannot message yourself"
