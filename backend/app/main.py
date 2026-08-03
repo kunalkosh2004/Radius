@@ -14,7 +14,11 @@ from app.core.exceptions import AppError
 from app.core.pubsub import subscribe
 from app.core.redis import get_redis
 from app.db.dependencies import get_db
-from app.websocket.router import manager, router as ws_router
+from app.websocket.router import (
+    manager,
+    nearby_broadcaster,
+    router as ws_router,
+)
 
 settings = get_settings()
 
@@ -23,6 +27,7 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     tasks = [
         asyncio.create_task(presence_sweeper()),
+        asyncio.create_task(nearby_broadcaster()),
         asyncio.create_task(subscribe(get_redis(), manager)),
     ]
     yield

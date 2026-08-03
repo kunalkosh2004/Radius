@@ -2,6 +2,8 @@ import asyncio
 from contextlib import suppress
 from uuid import uuid4
 
+import pytest
+
 from app.core.pubsub import EVENTS_CHANNEL, publish, subscribe
 from app.core.redis import get_redis
 from app.main import app
@@ -117,6 +119,52 @@ async def test_multi_instance_message_delivery(client):
         await wait_for(lambda: bool(bob_socket_b.received))
         assert bob_socket_b.received[0]["type"] == "message:new"
         assert bob_socket_b.received[0]["message"]["body"] == "cross-instance"
+    finally:
+        sub_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await sub_task
+
+
+async def test_multi_instance_location_update_reaches_peer(client, mark_user_online):
+    """A location change on one instance notifies a peer socket on another."""
+    alice = await create_user(client, "alice")
+    bob = await create_user(client, "bob")
+    await mark_user_online(bob["id"])
+
+    manager_b = ConnectionManager()
+    ready = asyncio.Event()
+    sub_task = asyncio.create_task(
+        subscribe(redis, manager_b, origin="instance-b", ready=ready)
+    )
+    await asyncio.wait_for(ready.wait(), timeout=3)
+    bob_socket_b = StubSocket()
+    manager_b.add(bob["id"], bob_socket_b)
+
+    try:
+        async with ASGIWebSocketClient(
+            app, "/ws", f"user_id={alice['id']}"
+        ) as alice_ws:
+            await alice_ws.receive_json()  # presence:initial
+            await alice_ws.send_json(
+                {"type": "location:update", "latitude": 0.002, "longitude": 0.0}
+            )
+            nearby = await alice_ws.receive_json()
+            assert nearby["type"] == "nearby:update"
+            assert [u["nickname"] for u in nearby["users"]] == ["bob"]
+
+        await wait_for(
+            lambda: any(
+                m.get("type") == "nearby:neighbor-updated"
+                for m in bob_socket_b.received
+            )
+        )
+        updated = next(
+            m
+            for m in bob_socket_b.received
+            if m.get("type") == "nearby:neighbor-updated"
+        )
+        assert updated["user"]["id"] == str(alice["id"])
+        assert updated["distance_m"] == pytest.approx(222.4, rel=0.05)
     finally:
         sub_task.cancel()
         with suppress(asyncio.CancelledError):

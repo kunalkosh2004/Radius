@@ -1,8 +1,10 @@
 import anyio
+import asyncio
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 
 from app.core.config import get_settings
 from app.core.exceptions import SelfMessageNotAllowedError, UserNotFoundError
@@ -12,8 +14,10 @@ from app.db.session import SessionLocal
 from app.models import Message, User
 from app.repositories.message import MessageRepository
 from app.repositories.user import UserRepository
+from app.schemas.user import LocationUpdate
 from app.services.connection_tracker import ConnectionTracker
 from app.services.message import MessageService
+from app.services.nearby import NearbyService
 from app.services.presence import PresenceService
 from app.websocket.manager import ConnectionManager
 
@@ -162,6 +166,110 @@ async def _handle_message_send(
     )
 
 
+def _nearby_update_payload(radius_m: int, nearby) -> dict:
+    """A user's full nearby list, pushed after a move and periodically."""
+    return {
+        "type": "nearby:update",
+        "radius_m": radius_m,
+        "users": [
+            {
+                "id": str(other.id),
+                "nickname": other.nickname,
+                "distance_m": round(distance, 1),
+            }
+            for other, distance in nearby
+        ],
+    }
+
+
+def _neighbor_updated_payload(mover: User, distance_m: float | None) -> dict:
+    """Tell a peer about a move; distance_m is null when the mover left range."""
+    return {
+        "type": "nearby:neighbor-updated",
+        "user": {"id": str(mover.id), "nickname": mover.nickname},
+        "distance_m": distance_m,
+    }
+
+
+async def apply_location_update(
+    user_id: UUID, data: LocationUpdate
+) -> tuple[UUID, dict, dict[UUID, dict]]:
+    """Persist a location change and build the nearby fan-out payloads.
+
+    Returns (mover_id, mover's nearby:update payload, per-peer neighbor
+    payloads). Payloads are built while the session is open because commit
+    expires the ORM instances.
+    """
+    radius = settings.PRESENCE_NEARBY_RADIUS_M
+    async with SessionLocal() as session:
+        service = NearbyService(UserRepository(session))
+        change = await service.update_location(user_id, data, radius)
+        mover_payload = _nearby_update_payload(radius, change.nearby)
+        neighbor_payloads = {
+            peer_id: _neighbor_updated_payload(change.mover, distance)
+            for peer_id, distance in change.affected.items()
+        }
+        await session.commit()
+    return change.mover.id, mover_payload, neighbor_payloads
+
+
+async def publish_nearby_changes(
+    mover_id: UUID, mover_payload: dict, neighbor_payloads: dict[UUID, dict]
+) -> None:
+    """Fan a location change out: full list to the mover, deltas to peers."""
+    await _fanout([mover_id], mover_payload)
+    for peer_id, payload in neighbor_payloads.items():
+        await _fanout([peer_id], payload)
+
+
+async def _handle_location_update(
+    websocket: WebSocket, me: User, raw: dict
+) -> None:
+    """Handle location:update: move the user and push live nearby changes."""
+    try:
+        data = LocationUpdate.model_validate(raw)
+    except ValidationError:
+        await websocket.send_json(
+            {"type": "nearby:error", "error": "invalid location"}
+        )
+        return
+
+    try:
+        mover_id, mover_payload, neighbor_payloads = await apply_location_update(
+            me.id, data
+        )
+    except UserNotFoundError:
+        await websocket.send_json({"type": "nearby:error", "error": "unknown user"})
+        return
+    await publish_nearby_changes(mover_id, mover_payload, neighbor_payloads)
+
+
+async def broadcast_nearby() -> None:
+    """Push a fresh nearby:update to every socket connected to this instance."""
+    radius = settings.PRESENCE_NEARBY_RADIUS_M
+    for user_id in list(manager.online_user_ids):
+        try:
+            async with SessionLocal() as session:
+                service = NearbyService(UserRepository(session))
+                nearby = await service.nearby(user_id, radius)
+                payload = _nearby_update_payload(radius, nearby)
+            await manager.send_to_user(user_id, payload)
+        except UserNotFoundError:
+            continue
+        except Exception:
+            logger.exception("nearby broadcast failed for %s", user_id)
+
+
+async def nearby_broadcaster() -> None:
+    """Periodically refresh nearby lists so missed events self-heal."""
+    while True:
+        await asyncio.sleep(settings.NEARBY_BROADCAST_INTERVAL_S)
+        try:
+            await broadcast_nearby()
+        except Exception:
+            logger.exception("nearby broadcast pass failed")
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket, user_id: UUID = Query(...)
@@ -242,6 +350,8 @@ async def websocket_endpoint(
                 await _handle_message_send(websocket, me.id, message)
             elif message.get("type") == "message:read":
                 await _handle_message_read(websocket, me.id, message)
+            elif message.get("type") == "location:update":
+                await _handle_location_update(websocket, me, message)
     finally:
         manager.remove(user_id, websocket)
         try:

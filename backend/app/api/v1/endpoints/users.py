@@ -8,6 +8,7 @@ from app.models import User
 from app.repositories.user import UserRepository
 from app.schemas.user import LocationUpdate, UserCreate, UserNearby, UserRead
 from app.services.user import UserService
+from app.websocket.router import apply_location_update, publish_nearby_changes
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -28,12 +29,11 @@ async def create_user(
     "/{user_id}/location",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def update_location(
-    user_id: UUID,
-    payload: LocationUpdate,
-    service: UserService = Depends(get_user_service),
-) -> None:
-    await service.update_location(user_id, payload)
+async def update_location(user_id: UUID, payload: LocationUpdate) -> None:
+    mover_id, mover_payload, neighbor_payloads = await apply_location_update(
+        user_id, payload
+    )
+    await publish_nearby_changes(mover_id, mover_payload, neighbor_payloads)
 
 
 @router.get("/{user_id}/nearby", response_model=list[UserNearby])
