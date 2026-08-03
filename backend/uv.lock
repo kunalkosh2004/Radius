@@ -651,6 +651,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "anyio" },
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "geoalchemy2" },
@@ -673,6 +674,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.16.4" },
+    { name = "anyio", specifier = ">=4.0.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "geoalchemy2", specifier = ">=0.18.0" },

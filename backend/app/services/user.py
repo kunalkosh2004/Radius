@@ -23,8 +23,6 @@ class UserService:
         user = User(
             nickname=nickname,
             location=WKTElement(f"POINT({data.longitude} {data.latitude})", srid=4326),
-            is_online=True,
-            last_seen=datetime.now(UTC),
         )
 
         return await self._repository.create(user)

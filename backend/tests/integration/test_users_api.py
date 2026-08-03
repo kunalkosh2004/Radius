@@ -13,9 +13,9 @@ async def test_create_user_success(client):
     assert body["nickname"] == "Radman"
     assert body["latitude"] == 37.7749
     assert body["longitude"] == -122.4194
-    assert body["is_online"] is True
+    assert body["is_online"] is False
     assert body["id"]
-    assert body["last_seen"]
+    assert body["last_seen"] is None
     assert body["created_at"]
 
 
@@ -103,14 +103,14 @@ async def test_update_location_unknown_user_returns_404(client):
     assert response.json()["detail"] == "user not found"
 
 
-async def test_nearby_returns_users_within_radius(client):
+async def test_nearby_returns_users_within_radius(client, mark_user_online):
     origin = await client.post(
         "/api/v1/users",
         json={"nickname": "Origin", "latitude": 0.0, "longitude": 0.0},
     )
     origin_id = origin.json()["id"]
 
-    await client.post(
+    near = await client.post(
         "/api/v1/users",
         json={"nickname": "Near", "latitude": 0.01, "longitude": 0.0},
     )
@@ -118,6 +118,9 @@ async def test_nearby_returns_users_within_radius(client):
         "/api/v1/users",
         json={"nickname": "Far", "latitude": 1.0, "longitude": 0.0},
     )
+
+    await mark_user_online(origin_id)
+    await mark_user_online(near.json()["id"])
 
     response = await client.get(f"/api/v1/users/{origin_id}/nearby?radius_m=5000")
 
@@ -127,11 +130,12 @@ async def test_nearby_returns_users_within_radius(client):
     assert body[0]["distance_m"] == pytest.approx(1105.7, rel=0.01)
 
 
-async def test_nearby_excludes_self(client):
+async def test_nearby_excludes_self(client, mark_user_online):
     origin = await client.post(
         "/api/v1/users",
         json={"nickname": "Origin", "latitude": 0.0, "longitude": 0.0},
     )
+    await mark_user_online(origin.json()["id"])
 
     response = await client.get(
         f"/api/v1/users/{origin.json()['id']}/nearby?radius_m=5000"
@@ -141,12 +145,12 @@ async def test_nearby_excludes_self(client):
     assert response.json() == []
 
 
-async def test_nearby_default_radius_filters_beyond_500m(client):
+async def test_nearby_default_radius_filters_beyond_500m(client, mark_user_online):
     origin = await client.post(
         "/api/v1/users",
         json={"nickname": "Origin", "latitude": 0.0, "longitude": 0.0},
     )
-    await client.post(
+    close = await client.post(
         "/api/v1/users",
         json={"nickname": "Close", "latitude": 0.001, "longitude": 0.0},
     )
@@ -154,6 +158,9 @@ async def test_nearby_default_radius_filters_beyond_500m(client):
         "/api/v1/users",
         json={"nickname": "Edge", "latitude": 0.01, "longitude": 0.0},
     )
+
+    await mark_user_online(origin.json()["id"])
+    await mark_user_online(close.json()["id"])
 
     response = await client.get(f"/api/v1/users/{origin.json()['id']}/nearby")
 

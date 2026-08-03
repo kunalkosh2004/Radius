@@ -11,6 +11,10 @@ class Settings(BaseSettings):
 
     API_V1_PREFIX: str = "/api/v1"
 
+    PRESENCE_HEARTBEAT_TIMEOUT_S: int = 90
+    PRESENCE_SWEEP_INTERVAL_S: int = 15
+    PRESENCE_NEARBY_RADIUS_M: int = 500
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

@@ -50,8 +50,8 @@ async def test_create_user_strips_nickname_and_builds_point():
 
     assert user.nickname == "Radman"
     assert isinstance(user.location, WKTElement)
-    assert user.is_online is True
-    assert user.last_seen is not None
+    assert user.is_online is not True
+    assert user.last_seen is None
 
 
 async def test_create_user_duplicate_nickname_raises():

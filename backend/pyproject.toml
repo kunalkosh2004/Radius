@@ -16,6 +16,7 @@ dependencies = [
     "geoalchemy2>=0.18.0",
     "shapely>=2.0.0",
     "greenlet>=3.5.4",
+    "anyio>=4.0.0",
 ]
 
 [dependency-groups]
