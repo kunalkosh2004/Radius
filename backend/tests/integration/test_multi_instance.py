@@ -6,6 +6,7 @@ import pytest
 
 from app.core.pubsub import EVENTS_CHANNEL, publish, subscribe
 from app.core.redis import get_redis
+from app.core.ws_token import create_ws_token
 from app.main import app
 from app.services.connection_tracker import ConnectionTracker
 from app.websocket.manager import ConnectionManager
@@ -108,7 +109,7 @@ async def test_multi_instance_message_delivery(client):
 
     try:
         async with ASGIWebSocketClient(
-            app, "/ws", f"user_id={alice['id']}"
+            app, "/ws", f"token={create_ws_token(alice['id'])}"
         ) as alice_ws:
             await alice_ws.receive_json()  # presence:initial
             await alice_ws.send_json(
@@ -142,7 +143,7 @@ async def test_multi_instance_location_update_reaches_peer(client, mark_user_onl
 
     try:
         async with ASGIWebSocketClient(
-            app, "/ws", f"user_id={alice['id']}"
+            app, "/ws", f"token={create_ws_token(alice['id'])}"
         ) as alice_ws:
             await alice_ws.receive_json()  # presence:initial
             await alice_ws.send_json(

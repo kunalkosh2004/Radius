@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     MESSAGE_MAX_LENGTH: int = 2000
     MESSAGE_PAGE_SIZE: int = 50
 
+    WS_TOKEN_SECRET: str = "dev-ws-token-secret-change-me"
+    WS_TOKEN_TTL_S: int = 60
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

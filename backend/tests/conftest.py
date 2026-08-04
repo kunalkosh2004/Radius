@@ -4,6 +4,7 @@ os.environ["DATABASE_URL"] = "postgresql+asyncpg://radius:radius123@localhost:54
 os.environ["REDIS_URL"] = "redis://localhost:6380"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["DEBUG"] = "false"
+os.environ["WS_TOKEN_SECRET"] = "test-secret"
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient

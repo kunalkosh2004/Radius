@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.exceptions import SelfMessageNotAllowedError, UserNotFoundError
 from app.core.pubsub import publish
 from app.core.redis import get_redis
+from app.core.ws_token import verify_ws_token
 from app.db.session import SessionLocal
 from app.models import Message, User
 from app.repositories.message import MessageRepository
@@ -272,9 +273,13 @@ async def nearby_broadcaster() -> None:
 
 @router.websocket("/ws")
 async def websocket_endpoint(
-    websocket: WebSocket, user_id: UUID = Query(...)
+    websocket: WebSocket, token: str = Query(...)
 ) -> None:
     """Presence connection: heartbeat + online/offline notification to nearby users.
+
+    The `token` query parameter is a short-lived signed token issued by
+    ``POST /api/v1/auth/ws-token``; it identifies the connecting user, so a
+    leaked websocket URL stops working once the token expires.
 
     Note: unlike HTTP dependencies, we never hold a DB session for the
     lifetime of the socket. Each operation opens a short-lived session and
@@ -285,6 +290,11 @@ async def websocket_endpoint(
     instances in Redis, and fan-out goes through Redis pub/sub so sockets on
     other instances receive the same events.
     """
+    user_id = verify_ws_token(token)
+    if user_id is None:
+        await websocket.close(code=4401, reason="invalid token")
+        return
+
     async with SessionLocal() as session:
         service = PresenceService(UserRepository(session))
         me = await service.get_user(user_id)

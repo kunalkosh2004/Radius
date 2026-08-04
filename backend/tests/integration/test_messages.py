@@ -3,6 +3,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import get_settings
+from app.core.ws_token import create_ws_token
 from app.main import app
 from tests.websocket_client import ASGIWebSocketClient
 
@@ -23,7 +24,7 @@ async def create_user(client, nickname, latitude=0.0, longitude=0.0):
 
 
 def connect(client, user_id):
-    return ASGIWebSocketClient(app, "/ws", f"user_id={user_id}")
+    return ASGIWebSocketClient(app, "/ws", f"token={create_ws_token(user_id)}")
 
 
 async def test_send_message_delivers_ack_and_new(client):

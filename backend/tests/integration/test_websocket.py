@@ -5,9 +5,13 @@ import pytest
 from sqlalchemy import select, update
 
 from app.core.background import sweep_once
+from app.core.config import get_settings
+from app.core.ws_token import create_ws_token
 from app.main import app
 from app.models import User
 from tests.websocket_client import ASGIWebSocketClient, WebSocketDisconnect
+
+settings = get_settings()
 
 
 async def create_user(client, nickname, latitude, longitude):
@@ -27,13 +31,15 @@ async def test_connect_sends_initial_presence(client):
     alice = await create_user(client, "alice", 0.0, 0.0)
     bob = await create_user(client, "bob", 0.001, 0.0)
 
-    async with ASGIWebSocketClient(app, "/ws", f"user_id={bob['id']}") as bob_ws:
+    async with ASGIWebSocketClient(
+        app, "/ws", f"token={create_ws_token(bob['id'])}"
+    ) as bob_ws:
         initial_bob = await bob_ws.receive_json()
         assert initial_bob["type"] == "presence:initial"
         assert initial_bob["users"] == []
 
         async with ASGIWebSocketClient(
-            app, "/ws", f"user_id={alice['id']}"
+            app, "/ws", f"token={create_ws_token(alice['id'])}"
         ) as alice_ws:
             initial_alice = await alice_ws.receive_json()
             assert initial_alice["type"] == "presence:initial"
@@ -49,7 +55,9 @@ async def test_connect_sends_initial_presence(client):
 async def test_heartbeat_ping_pong(client):
     user = await create_user(client, "hrt", 0.0, 0.0)
 
-    async with ASGIWebSocketClient(app, "/ws", f"user_id={user['id']}") as ws:
+    async with ASGIWebSocketClient(
+        app, "/ws", f"token={create_ws_token(user['id'])}"
+    ) as ws:
         assert (await ws.receive_json())["type"] == "presence:initial"
 
         await ws.send_json({"type": "ping"})
@@ -60,11 +68,13 @@ async def test_disconnect_notifies_nearby_user(client):
     alice = await create_user(client, "alice", 0.0, 0.0)
     bob = await create_user(client, "bob", 0.001, 0.0)
 
-    async with ASGIWebSocketClient(app, "/ws", f"user_id={bob['id']}") as bob_ws:
+    async with ASGIWebSocketClient(
+        app, "/ws", f"token={create_ws_token(bob['id'])}"
+    ) as bob_ws:
         await bob_ws.receive_json()
 
         async with ASGIWebSocketClient(
-            app, "/ws", f"user_id={alice['id']}"
+            app, "/ws", f"token={create_ws_token(alice['id'])}"
         ) as alice_ws:
             await alice_ws.receive_json()
             assert (await bob_ws.receive_json())["status"] == "online"
@@ -76,11 +86,38 @@ async def test_disconnect_notifies_nearby_user(client):
 
 
 async def test_connect_unknown_user_is_rejected(client):
-    with pytest.raises(WebSocketDisconnect):
+    with pytest.raises(WebSocketDisconnect) as exc_info:
         async with ASGIWebSocketClient(
-            app, "/ws", "user_id=00000000-0000-0000-0000-000000000000"
+            app, "/ws", f"token={create_ws_token(UUID(int=0))}"
         ) as ws:
             await ws.receive_json()
+    assert exc_info.value.code == 4404
+
+
+async def test_connect_missing_token_is_rejected(client):
+    with pytest.raises(WebSocketDisconnect):
+        async with ASGIWebSocketClient(app, "/ws", "") as ws:
+            await ws.receive_json()
+
+
+async def test_connect_tampered_token_is_rejected(client):
+    alice = await create_user(client, "alice", 0.0, 0.0)
+    tampered = create_ws_token(alice["id"]) + "x"
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        async with ASGIWebSocketClient(app, "/ws", f"token={tampered}") as ws:
+            await ws.receive_json()
+    assert exc_info.value.code == 4401
+
+
+async def test_connect_expired_token_is_rejected(client, monkeypatch):
+    alice = await create_user(client, "alice", 0.0, 0.0)
+    monkeypatch.setattr(settings, "WS_TOKEN_TTL_S", -1)
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        async with ASGIWebSocketClient(
+            app, "/ws", f"token={create_ws_token(alice['id'])}"
+        ) as ws:
+            await ws.receive_json()
+    assert exc_info.value.code == 4401
 
 
 async def test_sweep_marks_stale_users_offline(client, db_session, mark_user_online):

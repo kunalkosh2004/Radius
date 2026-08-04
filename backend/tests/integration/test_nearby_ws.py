@@ -1,6 +1,7 @@
 import pytest
 
 from app.main import app
+from app.core.ws_token import create_ws_token
 from app.websocket.router import broadcast_nearby
 from tests.websocket_client import ASGIWebSocketClient
 
@@ -20,7 +21,7 @@ async def create_user(client, nickname, latitude, longitude):
 
 async def open_socket(client, nickname, latitude, longitude):
     user = await create_user(client, nickname, latitude, longitude)
-    ws = ASGIWebSocketClient(app, "/ws", f"user_id={user['id']}")
+    ws = ASGIWebSocketClient(app, "/ws", f"token={create_ws_token(user['id'])}")
     await ws.__aenter__()
     return user, ws
 
